@@ -5,8 +5,9 @@ from django.views.decorators.http import require_POST
 from django.views.generic import ListView
 from taggit.models import Tag
 from django.db.models import Count
-from .forms import EmailPostForm, CommentForm
+from .forms import EmailPostForm, CommentForm, SearchForm
 from .models import Post
+from django.contrib.postgres.search import SearchVector, SearchQuery, TrigramSimilarity
 
 
 class PostListView(ListView):
@@ -26,8 +27,9 @@ def post_list(request, tag_slug=None):
         tag = get_object_or_404(Tag, slug=tag_slug)
         post_list = post_list.filter(tags__in=[tag])
     # Pagination with 3 posts per page
-    paginator = Paginator(post_list, 3)
+    per_page = request.GET.get('limit', 3)
     page_number = request.GET.get('page', 1)
+    paginator = Paginator(post_list, per_page)
     try:
         posts = paginator.page(page_number)
     except PageNotAnInteger:
@@ -99,3 +101,29 @@ def post_comment(request, post_id):
                   {'post': post,
                    'form': form,
                    'comment': comment})
+
+
+def post_search(request):
+    form = SearchForm()
+    query = None
+    results = []
+
+    if 'query' in request.GET:
+        form = SearchForm(request.GET)
+        if form.is_valid():
+            query = form.cleaned_data['query']
+            search_vector = SearchVector('title', weight='A') + SearchVector('body', weight='B')
+            search_query = SearchQuery(query)
+            # results = Post.published.annotate(
+            #     search=SearchVector(search_vector, search_query)
+            # ).filter(rank__gte=0.3).order_by('-rank')
+            results = Post.published.annotate(
+                similarity=TrigramSimilarity('title', query),
+            ).filter(similarity__gt=0.1).order_by('-similarity')
+    return render(request,
+                  'blog/post/search.html',
+                  {
+                      'form': form,
+                      'query': query,
+                      'results': results
+                  })
